@@ -6,7 +6,6 @@ tests.app.test_witnessing module
 
 import errno
 import json
-import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -15,28 +14,20 @@ from falcon import testing
 from hio.base import doing
 from keri import kering
 from keri.app import habbing
+from keri.core import eventing, parsing
 from keri.help import helping
 
 from witopnet.core import basing, oobing, witnessing
 
 CONTROLLER_AID = "ENsqL5zLYNbZf0kcOlx-ioqNWlatD9rKZZM4hbEI7nza"
-STREAM_MESSAGE_PATTERN = re.compile(rb'\{"v":"([^"]+)","t":"([^"]+)"')
 
 
 def _stream_messages(stream):
-    """Return `(version, ilk)` pairs for each JSON KERI message in a CESR stream.
-
-    OOBI responses concatenate JSON KERI bodies with CESR attachments, so this
-    helper inspects each serialized body directly instead of assuming the first
-    message tells the whole versioning story for the stream.
-    """
-    messages = []
-    for version, ilk in STREAM_MESSAGE_PATTERN.findall(stream):
-        messages.append(
-            (kering.deversify(version.decode("utf-8")).pvrsn, ilk.decode("utf-8"))
-        )
-
-    return messages
+    """Parse every KERI message and its CESR attachments from an OOBI stream."""
+    ims = bytearray(stream)
+    results = parsing.Parser().parse(ims=ims, framed=False, processive=False)
+    assert not ims
+    return results
 
 
 def test_delete_witness_removes_registry_before_closing():
@@ -144,6 +135,7 @@ def test_self_owned_oobi_reuses_stored_reply_record_versions():
         transferable=False,
         salt=b"0123456789fedoob",
         version=kering.Vrsn_2_0,
+        kind=eventing.Kinds.json,
     ) as (_, wanHab):
         url = "http://127.0.0.1:5642/"
         msgs = bytearray()
@@ -189,19 +181,50 @@ def test_self_owned_oobi_reuses_stored_reply_record_versions():
         )
         assert rep_w.status == falcon.HTTP_OK
         witness_aid = rep_w.json["eid"]
+        witness = witery.wits[witness_aid]
 
         # Fetch the OOBI and assert it is successful and parse the messages
-        response = client.simulate_get(f"/oobi/{witness_aid}")
+        with (
+            patch.object(
+                witness.hab,
+                "replyToOobi",
+                wraps=witness.hab.replyToOobi,
+            ) as reply_to_oobi,
+        ):
+            response = client.simulate_get(f"/oobi/{witness_aid}")
+
         assert response.status_code == 200
+        assert response.content_type == "application/json+cesr"
+        assert reply_to_oobi.call_args.kwargs["pvrsn"] == kering.Vrsn_2_0
+        assert reply_to_oobi.call_args.kwargs["gvrsn"] == kering.Vrsn_2_0
+        assert reply_to_oobi.call_args.kwargs["kind"] == eventing.Kinds.json
         messages = _stream_messages(response.content)
 
-        # With the simpler `replyToOobi()` path, stored reply records come back
-        # in whatever version they were originally authored. This witness's
-        # endpoint metadata was created as v2, so the discovery replies remain
-        # v2 on the wire.
-        default_reply_versions = [version for version, ilk in messages if ilk == "rpy"]
-        assert default_reply_versions
-        assert all(version == kering.Vrsn_2_0 for version in default_reply_versions)
+        # Stored reply bodies keep the version in which they were authored while
+        # replyToOobi applies the requested genus to their attachments. This
+        # witness's endpoint metadata and requested genus are both v2.
+        replies = [result.serder for result in messages if result.serder.ilk == "rpy"]
+        assert replies
+        assert all(serder.pvrsn == kering.Vrsn_2_0 for serder in replies)
+        assert all(serder.kind == eventing.Kinds.json for serder in replies)
+
+        self_events = [
+            result
+            for result in messages
+            if result.serder.pre == witness_aid
+            and result.serder.ilk
+            in (
+                eventing.Ilks.icp,
+                eventing.Ilks.rot,
+                eventing.Ilks.ixn,
+                eventing.Ilks.dip,
+                eventing.Ilks.drt,
+            )
+        ]
+        assert self_events
+        assert all(result.serder.pvrsn == kering.Vrsn_2_0 for result in self_events)
+        assert all(result.sigers for result in self_events)
+        assert all(result.frcs for result in self_events)
 
         # Fetch the OOBI again and confirm the stored reply versions remain
         # stable across repeated requests.
@@ -211,9 +234,81 @@ def test_self_owned_oobi_reuses_stored_reply_record_versions():
 
         # The stored reply records keep their original authored v2 format
         # across repeated OOBI fetches too.
-        v2_reply_versions = [version for version, ilk in messages if ilk == "rpy"]
-        assert v2_reply_versions
-        assert all(version == kering.Vrsn_2_0 for version in v2_reply_versions)
+        replies = [result.serder for result in messages if result.serder.ilk == "rpy"]
+        assert replies
+        assert all(serder.pvrsn == kering.Vrsn_2_0 for serder in replies)
+        assert all(serder.kind == eventing.Kinds.json for serder in replies)
+
+
+def test_witnessed_controller_oobi_uses_serving_habitat_genus():
+    with (
+        habbing.openHab(
+            name="wan-oobi-seed",
+            transferable=False,
+            salt=b"0123456789feowit",
+            version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
+        ) as (_, seedHab),
+        habbing.openHab(
+            name="bob-oobi-controller",
+            salt=b"0123456789feoctl",
+            version=kering.Vrsn_1_0,
+            kind=eventing.Kinds.json,
+        ) as (_, bobHab),
+    ):
+        safe = basing.Baser(name=seedHab.name, temp=seedHab.temp)
+        witery = witnessing.Witnessery(db=safe, temp=seedHab.temp)
+        witness = witery.createWitness(aid=bobHab.pre)
+
+        witness.parser.parseOne(
+            ims=bytearray(bobHab.msgOwnInception()),
+            local=False,
+            version=kering.Vrsn_1_0,
+        )
+        rotation = bobHab.rotate(
+            adds=[witness.hab.pre],
+            version=kering.Vrsn_1_0,
+            gvrsn=kering.Vrsn_1_0,
+        )
+        witness.parser.parseOne(
+            ims=bytearray(rotation),
+            local=True,
+            version=kering.Vrsn_1_0,
+        )
+        assert bobHab.pre in witness.hab.kevers
+        assert witness.hab.pre in witness.hab.kevers[bobHab.pre].wits
+
+        endpoint = oobing.OOBIEnd(witery=witery)
+        app = falcon.App()
+        app.add_route("/oobi/{aid}", endpoint)
+        client = testing.TestClient(app)
+
+        with (
+            patch.object(witness.hab.db, "fullyWitnessed", return_value=True),
+            patch.object(
+                witness.hab,
+                "replyToOobi",
+                wraps=witness.hab.replyToOobi,
+            ) as reply_to_oobi,
+        ):
+            response = client.simulate_get(f"/oobi/{bobHab.pre}")
+
+        assert response.status_code == 200
+        assert response.content_type == "application/json+cesr"
+        assert reply_to_oobi.call_args.kwargs["pvrsn"] == kering.Vrsn_2_0
+        assert reply_to_oobi.call_args.kwargs["gvrsn"] == kering.Vrsn_2_0
+        assert reply_to_oobi.call_args.kwargs["kind"] == eventing.Kinds.json
+
+        messages = _stream_messages(response.content)
+        controller_events = [
+            result for result in messages if result.serder.pre == bobHab.pre
+        ]
+        assert controller_events
+        assert all(
+            result.serder.pvrsn == kering.Vrsn_1_0 for result in controller_events
+        )
+        assert all(result.sigers for result in controller_events)
+        assert all(result.frcs for result in controller_events)
 
 
 def test_delete_missing_witness_returns_not_found():

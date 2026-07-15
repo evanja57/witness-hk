@@ -71,12 +71,6 @@ class OOBIEnd:
         if not db.fullyWitnessed(kever.serder):
             raise falcon.HTTPNotFound(description=f"aid {aid} not found")
 
-        replying = dict(
-            version=kering.Vrsn_1_0,
-            pvrsn=kering.Vrsn_1_0,
-            kind=eventing.Kinds.json,
-        )
-
         owits = oset(kever.wits)
         if kever.prefixer.qb64 in witness.hby.prefixes:  # One of our identifiers
             hab = witness.hby.habs[kever.prefixer.qb64]
@@ -87,6 +81,14 @@ class OOBIEnd:
             hab = witness.hby.habs[pre]
         else:  # Not allowed to respond
             raise falcon.HTTPNotAcceptable(description="invalid OOBI request")
+
+        pvrsn = hab.kever.serder.pvrsn
+        gvrsn = pvrsn
+        replying = dict(
+            pvrsn=pvrsn,
+            gvrsn=gvrsn,
+            kind=eventing.Kinds.json,
+        )
 
         eids = []
         if eid:
@@ -105,7 +107,7 @@ class OOBIEnd:
                 eids=eids,
                 **replying,
             )
-            msgs.extend(hab.replay(aid))
+            msgs.extend(hab.replay(aid, gvrsn=gvrsn))
 
         if msgs:
             rep.status = falcon.HTTP_200  # This is the default status

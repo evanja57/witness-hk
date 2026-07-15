@@ -9,6 +9,7 @@ import json
 import falcon
 
 import pyotp
+import pytest
 from falcon import testing
 from hio.base import doing
 from keri import kering
@@ -18,7 +19,7 @@ from keri.app.httping import (
     CESR_CONTENT_TYPE,
     CESR_DESTINATION_HEADER,
 )
-from keri.core import coring, serdering, counting
+from keri.core import coring, serdering, counting, eventing
 from keri.help import helping
 
 from witopnet.app import aiding, indirecting
@@ -112,16 +113,27 @@ def _start_witery(hab):
     return doist, witery
 
 
-def test_aids_uses_message_protocol_version(multipart):
-    """Regression: KERI10 CESR attachments must parse with the event's pvrsn.
-
-    Newer keripy defaults attachment decoding to CESR v2 unless ``version=`` is
-    supplied; without matching v1, controller sigs are dropped and /aids returns
-    ``KEL part not valid inception event``.
-    """
+@pytest.mark.parametrize(
+    "version",
+    (kering.Vrsn_1_0, kering.Vrsn_2_0),
+    ids=("v1", "v2"),
+)
+def test_aids_uses_message_protocol_version(multipart, version):
+    """Regression: /aids must parse attachments with the event's pvrsn."""
     with (
-        habbing.openHab(name="bob", salt=b"0123456789fedbob") as (_, bobHab),
-        habbing.openHab(name="wan", transferable=False, salt=b"0123456789fedcba") as (
+        habbing.openHab(
+            name=f"bob-aids-v{version.major}",
+            salt=b"0123456789fedbob",
+            version=version,
+            kind=eventing.Kinds.json,
+        ) as (_, bobHab),
+        habbing.openHab(
+            name="wan",
+            transferable=False,
+            salt=b"0123456789fedcba",
+            version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
+        ) as (
             _,
             wanHab,
         ),
@@ -147,7 +159,8 @@ def test_aids_uses_message_protocol_version(multipart):
 
         kel = bobHab.msgOwnEvent(sn=0)
         serder = serdering.SerderKERI(raw=kel)
-        assert kering.deversify(serder.ked["v"]).pvrsn.major == 1
+        assert serder.pvrsn == version
+        assert serder.kind == eventing.Kinds.json
 
         body, headers = multipart.create(dict(kel=kel))
         headers[CESR_DESTINATION_HEADER] = bob_wit
@@ -167,7 +180,12 @@ def test_http_post_uses_inbound_version_across_event_types():
 
     for bob_name, bob_salt, version in cases:
         with (
-            habbing.openHab(name=bob_name, salt=bob_salt, version=version) as (
+            habbing.openHab(
+                name=bob_name,
+                salt=bob_salt,
+                version=version,
+                kind=eventing.Kinds.json,
+            ) as (
                 _,
                 bobHab,
             ),
@@ -176,6 +194,7 @@ def test_http_post_uses_inbound_version_across_event_types():
                 transferable=False,
                 salt=b"0123456789fehtwa",
                 version=kering.Vrsn_2_0,
+                kind=eventing.Kinds.json,
             ) as (_, wanHab),
         ):
             _seed_endpoint_records(
@@ -226,6 +245,7 @@ def test_http_post_uses_inbound_version_across_event_types():
                 src=bob_wit,
                 route="ksn",
                 version=version,
+                kind=eventing.Kinds.json,
             )
             req = _create_cesr_request(
                 path="/",
@@ -243,6 +263,7 @@ def test_http_post_uses_inbound_version_across_event_types():
                 eid=bobHab.pre,
                 role=kering.Roles.controller,
                 version=version,
+                kind=eventing.Kinds.json,
             )
             req = _create_cesr_request(
                 path="/",
@@ -259,14 +280,30 @@ def test_http_post_uses_inbound_version_across_event_types():
 
 def test_encrypting_totp(multipart):
     with (
-        habbing.openHab(name="bob", salt=b"0123456789fedbob") as (bobHby, bobHab),
-        habbing.openHab(name="eve", salt=b"0123456789fedeve") as (eveHby, eveHab),
-        habbing.openHab(name="wan", transferable=False, salt=b"0123456789fedcba") as (
+        habbing.openHab(
+            name="bob",
+            salt=b"0123456789fedbob",
+            version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
+        ) as (bobHby, bobHab),
+        habbing.openHab(
+            name="eve",
+            salt=b"0123456789fedeve",
+            version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
+        ) as (eveHby, eveHab),
+        habbing.openHab(
+            name="wan",
+            transferable=False,
+            salt=b"0123456789fedcba",
+            version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
+        ) as (
             wanHby,
             wanHab,
         ),
     ):
-        assert bobHab.pre == "ENsqL5zLYNbZf0kcOlx-ioqNWlatD9rKZZM4hbEI7nza"
+        assert bobHab.pre == "EO5CgjiI4SVOuVNj-C5a0k-seIvFDuswAm_dwj5kVJzB"
         verfer = bobHab.kever.verfers[0]
         assert verfer.qb64 == "DIJUDTxA5U1aX0XkaX4_Sx6dBYEfZcIWynOmeXsDFeQP"
 
@@ -378,7 +415,7 @@ def test_encrypting_totp(multipart):
 
         assert rep.status == falcon.HTTP_PRECONDITION_FAILED
         assert rep.json == {
-            "description": "AID=ENsqL5zLYNbZf0kcOlx-ioqNWlatD9rKZZM4hbEI7nza not "
+            "description": "AID=EO5CgjiI4SVOuVNj-C5a0k-seIvFDuswAm_dwj5kVJzB not "
             "initialized with 2-factor code",
             "title": "412 Precondition Failed",
         }
@@ -419,7 +456,11 @@ def test_encrypting_totp(multipart):
         totp = pyotp.TOTP(rcode)
         assert totp is not None
 
-        rot = bobHab.rotate(adds=[bobWit])
+        rot = bobHab.rotate(
+            adds=[bobWit],
+            version=kering.Vrsn_2_0,
+            gvrsn=kering.Vrsn_2_0,
+        )
 
         serder = serdering.SerderKERI(raw=rot)
         act = rot[serder.size :]
@@ -452,11 +493,11 @@ def test_encrypting_totp(multipart):
         assert rct.ked["t"] == "rct"
         assert rct.sn == 1
         assert rct.pre == bobHab.pre
-        assert kering.deversify(rct.ked["v"]).pvrsn.major == 1
+        assert rct.pvrsn == kering.Vrsn_2_0
 
         # Fetch the same stored receipt back over GET and verify that receipt
-        # lookup stays on the stored event's v1 body version while framing any
-        # generated witness signatures in the modern v2 CESR attachment format.
+        # lookup stays on the stored event's v2 body version while framing the
+        # generated witness signatures in the v2 CESR attachment format.
         rep = client.simulate_get(
             "/receipts",
             query_string=f"pre={bobHab.pre}&sn=1",
@@ -464,7 +505,7 @@ def test_encrypting_totp(multipart):
         )
         assert rep.status == falcon.HTTP_200
         rct = serdering.SerderKERI(raw=rep.content)
-        assert kering.deversify(rct.ked["v"]).pvrsn.major == 1
+        assert rct.pvrsn == kering.Vrsn_2_0
         atc = rep.content[len(rct.raw) :]
         assert counting.Counter(qb64b=atc).code == counting.CtrDex_2_0.WitnessIdxSigs
 
@@ -473,13 +514,17 @@ def test_receipts_post_and_get_follow_stored_v2_event_version(multipart):
     """Receipts should keep a v2 event's body version on both POST and GET."""
     with (
         habbing.openHab(
-            name="bob-v2", salt=b"0123456789febob2", version=kering.Vrsn_2_0
+            name="bob-v2",
+            salt=b"0123456789febob2",
+            version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
         ) as (_, bobHab),
         habbing.openHab(
             name="wan-v2",
             transferable=False,
             salt=b"0123456789fecba2",
             version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
         ) as (_, wanHab),
     ):
         _seed_endpoint_records(
