@@ -404,6 +404,7 @@ class Witnessery(doing.DoDoer):
                 role=kering.Roles.controller,
                 stamp=dt,
                 version=kering.Vrsn_2_0,
+                kind=eventing.Kinds.json,
             )
         )
         msgs.extend(
@@ -412,6 +413,7 @@ class Witnessery(doing.DoDoer):
                 scheme=self.scheme,
                 stamp=dt,
                 version=kering.Vrsn_2_0,
+                kind=eventing.Kinds.json,
             )
         )
         hab.psr.parse(ims=msgs)
