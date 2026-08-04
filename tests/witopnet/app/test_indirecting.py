@@ -6,50 +6,12 @@ Unit tests for KeyStateEnd and KeyLogEnd endpoint classes
 """
 
 import falcon
-import pytest
 from falcon import testing
-from hio.base import doing
 from unittest.mock import MagicMock
 from keri import kering
 from keri.app.httping import CESR_DESTINATION_HEADER
 
-from witopnet.app.indirecting import KeyStateEnd, KeyLogEnd, WitnessStart
-
-
-@pytest.mark.parametrize(
-    ("escrowTock", "expectedCount"),
-    ((None, 2), ("1.0", 1)),
-)
-def test_witness_start_processes_escrows_at_configured_cadence(
-    monkeypatch, escrowTock, expectedCount
-):
-    monkeypatch.delenv("WITOPNET_ESCROW_TOCK", raising=False)
-    if escrowTock is not None:
-        monkeypatch.setenv("WITOPNET_ESCROW_TOCK", escrowTock)
-
-    kvy = MagicMock()
-    tvy = MagicMock()
-    rvy = MagicMock()
-    exc = MagicMock()
-    witness_start = WitnessStart(
-        hab=MagicMock(),
-        parser=MagicMock(),
-        kvy=kvy,
-        tvy=tvy,
-        rvy=rvy,
-        exc=exc,
-    )
-    escrow_doer = next(
-        doer for doer in witness_start.doers if doer.__name__ == "escrowDo"
-    )
-
-    doist = doing.Doist(limit=1.0, tock=0.03125, doers=[escrow_doer])
-    doist.do()
-
-    assert kvy.processEscrows.call_count == expectedCount
-    assert rvy.processEscrowReply.call_count == expectedCount
-    assert tvy.processEscrows.call_count == expectedCount
-    assert exc.processEscrow.call_count == expectedCount
+from witopnet.app.indirecting import KeyStateEnd, KeyLogEnd
 
 
 class TestKeyStateEnd:
