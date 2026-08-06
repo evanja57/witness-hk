@@ -225,7 +225,7 @@ def test_http_post_uses_inbound_version_across_event_types():
             witness = witery.wits[bob_wit]
 
             # Submit an inception event
-            icp = bobHab.msgOwnEvent(sn=0)
+            icp = bobHab.msgOwnEvent(sn=0, gvrsn=version)
             req = _create_cesr_request(
                 path="/",
                 msg=icp,
@@ -250,6 +250,7 @@ def test_http_post_uses_inbound_version_across_event_types():
                 src=bob_wit,
                 route="ksn",
                 version=version,
+                gvrsn=version,
                 kind=eventing.Kinds.json,
             )
             req = _create_cesr_request(
