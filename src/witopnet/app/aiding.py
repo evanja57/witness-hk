@@ -101,13 +101,11 @@ class AidCollectionEnd:
 
         # A delkel will be provided if the target KEL is a delegated AID
         if delkel is not None:
-            dsmell = kering.smell(bytearray(delkel))
-            witness.parser.parse(delkel, local=False, version=dsmell.pvrsn)
+            witness.parser.parse(delkel, local=False)
 
         serder = serdering.SerderKERI(raw=bytes(kel))
         # Parse the event, get the KEL in our Kevers
-        smell = kering.deversify(serder.ked["v"])
-        witness.parser.parseOne(ims=kel, local=False, version=smell.pvrsn)
+        witness.parser.parseOne(ims=kel, local=False)
 
         if serder.pre not in witness.hab.kevers:  # Not a valid, signed inception event
             raise falcon.HTTPBadRequest(

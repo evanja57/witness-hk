@@ -118,8 +118,8 @@ def _start_witery(hab):
     (kering.Vrsn_1_0, kering.Vrsn_2_0),
     ids=("v1", "v2"),
 )
-def test_aids_uses_message_protocol_version(multipart, version):
-    """Regression: /aids must parse attachments with the event's pvrsn."""
+def test_aids_accepts_v2_attachments(multipart, version):
+    """Regression: /aids must parse V2 attachments for V1 and V2 events."""
     with (
         habbing.openHab(
             name=f"bob-aids-v{version.major}",
@@ -157,7 +157,12 @@ def test_aids_uses_message_protocol_version(multipart, version):
         bob_wit = rep.json["eid"]
         witness = witery.wits[bob_wit]
 
-        kel = bobHab.msgOwnEvent(sn=0)
+        kel = b"".join(
+            bobHab.db.clonePreIter(
+                pre=bobHab.pre,
+                gvrsn=kering.Vrsn_2_0,
+            )
+        )
         serder = serdering.SerderKERI(raw=kel)
         assert serder.pvrsn == version
         assert serder.kind == eventing.Kinds.json
