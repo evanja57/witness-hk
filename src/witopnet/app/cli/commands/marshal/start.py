@@ -8,6 +8,7 @@ Witness command line interface
 
 import argparse
 import logging
+import os
 
 from hio.base import doing
 from keri import __version__
@@ -151,6 +152,6 @@ def runMarshal(args, expire=0.0):
         cafilepath=args.cafilepath,
     )
 
-    tock = 0.00125
+    tock = float(os.getenv("WITOPNET_DOIST_TOCK", "0.03125"))
     doist = doing.Doist(limit=expire, tock=tock, real=True)
     doist.do(doers=doers)

@@ -4,6 +4,8 @@ witopnet.app.cli module
 
 """
 
+import os
+
 import multicommand
 from hio.base import doing
 from keri import help
@@ -29,13 +31,11 @@ def main():
 
     try:
         doers = args.handler(args)
-        tock = 0.00125
+        tock = float(os.getenv("WITOPNET_DOIST_TOCK", "0.03125"))
         doist = doing.Doist(limit=0.0, tock=tock, real=True)
         doist.do(doers=doers)
 
     except Exception as ex:
-        import os
-
         if os.getenv("DEBUG_WITOPNET"):
             import traceback
 
