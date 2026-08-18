@@ -99,13 +99,14 @@ class AidCollectionEnd:
         ):  # The form works but still raises this exception so ignore for now...
             pass
 
+        # /aids KEL streams use V2 attachment framing regardless of body version.
         # A delkel will be provided if the target KEL is a delegated AID
         if delkel is not None:
-            witness.parser.parse(delkel, local=False)
+            witness.parser.parse(delkel, local=False, version=kering.Vrsn_2_0)
 
         serder = serdering.SerderKERI(raw=bytes(kel))
         # Parse the event, get the KEL in our Kevers
-        witness.parser.parseOne(ims=kel, local=False)
+        witness.parser.parseOne(ims=kel, local=False, version=kering.Vrsn_2_0)
 
         if serder.pre not in witness.hab.kevers:  # Not a valid, signed inception event
             raise falcon.HTTPBadRequest(

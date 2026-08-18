@@ -119,7 +119,7 @@ def _start_witery(hab):
     ids=("v1", "v2"),
 )
 def test_aids_accepts_v2_attachments(multipart, version):
-    """Regression: /aids must parse V2 attachments for V1 and V2 events."""
+    """Regression: /aids must select V2 attachments for every body and request order."""
     with (
         habbing.openHab(
             name=f"bob-aids-v{version.major}",
@@ -127,6 +127,12 @@ def test_aids_accepts_v2_attachments(multipart, version):
             version=version,
             kind=eventing.Kinds.json,
         ) as (_, bobHab),
+        habbing.openHab(
+            name="legacy-aids-v1",
+            salt=b"0123456789feold1",
+            version=kering.Vrsn_1_0,
+            kind=eventing.Kinds.json,
+        ) as (_, legacyHab),
         habbing.openHab(
             name="wan",
             transferable=False,
@@ -157,6 +163,13 @@ def test_aids_accepts_v2_attachments(multipart, version):
         bob_wit = rep.json["eid"]
         witness = witery.wits[bob_wit]
 
+        witness.parser.parseOne(
+            ims=bytearray(legacyHab.msgOwnInception(gvrsn=kering.Vrsn_1_0)),
+            local=False,
+            version=kering.Vrsn_1_0,
+        )
+        assert witness.parser.version == kering.Vrsn_1_0
+
         kel = b"".join(
             bobHab.db.clonePreIter(
                 pre=bobHab.pre,
@@ -173,6 +186,7 @@ def test_aids_accepts_v2_attachments(multipart, version):
         assert rep.status == falcon.HTTP_200
         assert "totp" in rep.json and "oobi" in rep.json
         assert bobHab.pre in witness.hab.kevers
+        assert witness.parser.version == kering.Vrsn_2_0
 
 
 def test_http_post_uses_inbound_version_across_event_types():
