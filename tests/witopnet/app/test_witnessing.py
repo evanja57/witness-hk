@@ -261,7 +261,7 @@ def test_witnessed_controller_oobi_uses_serving_habitat_genus():
         witness = witery.createWitness(aid=bobHab.pre)
 
         witness.parser.parseOne(
-            ims=bytearray(bobHab.msgOwnInception(gvrsn=kering.Vrsn_1_0)),
+            ims=bytearray(bobHab.msgOwnInception()),
             local=False,
             version=kering.Vrsn_1_0,
         )

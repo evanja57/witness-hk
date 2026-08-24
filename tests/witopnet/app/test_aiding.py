@@ -4,6 +4,7 @@ tests.app.test_aiding module
 
 """
 
+from contextlib import contextmanager
 import json
 
 import falcon
@@ -19,7 +20,7 @@ from keri.app.httping import (
     CESR_CONTENT_TYPE,
     CESR_DESTINATION_HEADER,
 )
-from keri.core import coring, serdering, counting, eventing
+from keri.core import SealEvent, Salter, coring, serdering, counting, eventing
 from keri.help import helping
 
 from witopnet.app import aiding, indirecting
@@ -103,14 +104,31 @@ def _seed_endpoint_records(hab, *, url, version=None):
     hab.psr.parse(ims=msgs)
 
 
-def _start_witery(hab):
-    """Start an in-memory Witnessery backed by the supplied habitat settings."""
-    doist = doing.Doist(limit=1.0, tock=0.03125, real=True)
+@contextmanager
+def _open_witery(hab):
+    """Open a configured Witnessery and close all resources on exit."""
+    _seed_endpoint_records(
+        hab,
+        url="http://127.0.0.1:5642/",
+        version=hab.kever.serder.pvrsn,
+    )
     safe = basing.Baser(name=hab.name, temp=hab.temp)
-    witery = witnessing.Witnessery(db=safe, temp=hab.temp)
-    deeds = doist.enter(doers=[witery])
-    doist.recur(deeds=deeds)
-    return doist, witery
+    doist = None
+    try:
+        witery = witnessing.Witnessery(db=safe, temp=hab.temp)
+        doist = doing.Doist(
+            limit=1.0,
+            tock=0.03125,
+            real=True,
+            doers=[witery],
+        )
+        doist.enter()
+        doist.recur()
+        yield witery
+    finally:
+        if doist is not None:
+            doist.exit()
+        safe.close(clear=safe.temp)
 
 
 @pytest.mark.parametrize(
@@ -143,14 +161,8 @@ def test_aids_accepts_v2_attachments(multipart, version):
             _,
             wanHab,
         ),
+        _open_witery(wanHab) as witery,
     ):
-        _seed_endpoint_records(
-            wanHab,
-            url="http://127.0.0.1:5642/",
-            version=wanHab.kever.serder.pvrsn,
-        )
-        _doist, witery = _start_witery(wanHab)
-
         app = falcon.App()
         app.add_route("/witnesses", witnessing.WitnessCollectionEnd(witery))
         aiding.loadEnds(app=app, witery=witery)
@@ -189,6 +201,107 @@ def test_aids_accepts_v2_attachments(multipart, version):
         assert witness.parser.version == kering.Vrsn_2_0
 
 
+@pytest.mark.parametrize(
+    "version",
+    (kering.Vrsn_1_0, kering.Vrsn_2_0),
+    ids=("v1", "v2"),
+)
+def test_aids_accepts_v2_attachments_for_delegated_aids(multipart, version):
+    """Regression: /aids must parse delegated KELs with V2 attachments."""
+    suffix = f"v{version.major}"
+    with (
+        habbing.openHby(
+            name=f"delegated-aids-{suffix}",
+            salt=Salter(raw=f"0123456789feda{version.major:02d}".encode()).qb64,
+        ) as hby,
+        habbing.openHab(
+            name=f"legacy-delegated-{suffix}",
+            salt=f"0123456789feld{version.major:02d}".encode(),
+            version=kering.Vrsn_1_0,
+            kind=eventing.Kinds.json,
+        ) as (_, legacyHab),
+        habbing.openHab(
+            name=f"wan-delegated-{suffix}",
+            transferable=False,
+            salt=f"0123456789fewd{version.major:02d}".encode(),
+            version=kering.Vrsn_2_0,
+            kind=eventing.Kinds.json,
+        ) as (_, wanHab),
+        _open_witery(wanHab) as witery,
+    ):
+        delegatorHab = hby.makeHab(
+            name=f"delegator-{suffix}",
+            version=version,
+            kind=eventing.Kinds.json,
+        )
+        delegateHab = hby.makeHab(
+            name=f"delegate-{suffix}",
+            version=version,
+            kind=eventing.Kinds.json,
+            delpre=delegatorHab.pre,
+        )
+
+        seal = SealEvent(
+            i=delegateHab.pre,
+            s=delegateHab.kever.serder.snh,
+            d=delegateHab.kever.serder.said,
+        )
+        delegatorHab.interact(data=[seal._asdict()], version=version)
+        anchor = (
+            coring.Number(num=delegatorHab.kever.sn, code=coring.NumDex.Huge),
+            coring.Diger(qb64b=delegatorHab.kever.serder.saidb),
+        )
+        hby.db.aess.pin(
+            keys=(delegateHab.pre, delegateHab.kever.serder.said),
+            val=anchor,
+        )
+
+        delkel = b"".join(
+            hby.db.clonePreIter(
+                pre=delegatorHab.pre,
+                gvrsn=kering.Vrsn_2_0,
+            )
+        )
+        kel = b"".join(
+            hby.db.clonePreIter(
+                pre=delegateHab.pre,
+                gvrsn=kering.Vrsn_2_0,
+            )
+        )
+
+        app = falcon.App()
+        app.add_route("/witnesses", witnessing.WitnessCollectionEnd(witery))
+        aiding.loadEnds(app=app, witery=witery)
+        client = testing.TestClient(app)
+
+        rep = client.simulate_post(
+            path="/witnesses",
+            body=json.dumps({"aid": delegateHab.pre}),
+        )
+        assert rep.status == falcon.HTTP_OK
+        delegateWit = rep.json["eid"]
+        witness = witery.wits[delegateWit]
+
+        witness.parser.parseOne(
+            ims=bytearray(legacyHab.msgOwnInception(gvrsn=kering.Vrsn_1_0)),
+            local=False,
+            version=kering.Vrsn_1_0,
+        )
+        assert witness.parser.version == kering.Vrsn_1_0
+
+        body, headers = multipart.create(dict(delkel=delkel, kel=kel))
+        headers[CESR_DESTINATION_HEADER] = delegateWit
+        rep = client.simulate_post(path="/aids", body=body, headers=headers)
+
+        assert rep.status == falcon.HTTP_200
+        assert delegatorHab.pre in witness.hab.kevers
+        assert delegateHab.pre in witness.hab.kevers
+        assert witness.hab.kevers[delegatorHab.pre].serder.pvrsn == version
+        assert witness.hab.kevers[delegateHab.pre].serder.pvrsn == version
+        assert witness.hab.kevers[delegateHab.pre].delpre == delegatorHab.pre
+        assert witness.parser.version == kering.Vrsn_2_0
+
+
 def test_http_post_uses_inbound_version_across_event_types():
     """Tests `POST /` should parse real v1 and v2 bodies using each message's v field"""
 
@@ -215,14 +328,8 @@ def test_http_post_uses_inbound_version_across_event_types():
                 version=kering.Vrsn_2_0,
                 kind=eventing.Kinds.json,
             ) as (_, wanHab),
+            _open_witery(wanHab) as witery,
         ):
-            _seed_endpoint_records(
-                wanHab,
-                url="http://127.0.0.1:5642/",
-                version=wanHab.kever.serder.pvrsn,
-            )
-            _doist, witery = _start_witery(wanHab)
-
             http_end = indirecting.HttpEnd(witery=witery)
             app = falcon.App()
             app.add_route("/witnesses", witnessing.WitnessCollectionEnd(witery))
@@ -239,7 +346,7 @@ def test_http_post_uses_inbound_version_across_event_types():
             witness = witery.wits[bob_wit]
 
             # Submit an inception event
-            icp = bobHab.msgOwnEvent(sn=0, gvrsn=version)
+            icp = bobHab.msgOwnEvent(sn=0)
             req = _create_cesr_request(
                 path="/",
                 msg=icp,
@@ -264,7 +371,6 @@ def test_http_post_uses_inbound_version_across_event_types():
                 src=bob_wit,
                 route="ksn",
                 version=version,
-                gvrsn=version,
                 kind=eventing.Kinds.json,
             )
             req = _create_cesr_request(
@@ -546,14 +652,8 @@ def test_receipts_post_and_get_follow_stored_v2_event_version(multipart):
             version=kering.Vrsn_2_0,
             kind=eventing.Kinds.json,
         ) as (_, wanHab),
+        _open_witery(wanHab) as witery,
     ):
-        _seed_endpoint_records(
-            wanHab,
-            url="http://127.0.0.1:5642/",
-            version=wanHab.kever.serder.pvrsn,
-        )
-        _doist, witery = _start_witery(wanHab)
-
         app = falcon.App()
         app.add_route("/witnesses", witnessing.WitnessCollectionEnd(witery))
         aiding.loadEnds(app=app, witery=witery)
