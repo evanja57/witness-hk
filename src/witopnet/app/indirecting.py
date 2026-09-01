@@ -242,9 +242,6 @@ class HttpEnd:
         msg = bytearray(serder.raw)
         msg.extend(cr.attachments.encode("utf-8"))
 
-        # Use the message version
-        pvrsn = kering.deversify(serder.ked["v"]).pvrsn
-
         if (cipher := witness.getCode()) is not None:
 
             plain = witness.hab.decrypt(ser=cipher.raw)
@@ -254,14 +251,14 @@ class HttpEnd:
             if (auth := req.get_header("Authorization")) is not None and validCode(
                 scode, auth
             ):
-                witness.parser.parseOne(ims=msg, local=True, version=pvrsn)
+                witness.parser.parseOne(ims=msg, local=True, version=kering.Vrsn_2_0)
             else:  # Otherwise this is not from a trusted source, so parse it as not "local"
                 witness.parser.parseOne(
-                    ims=msg, local=False, version=pvrsn
+                    ims=msg, local=False, version=kering.Vrsn_2_0
                 )  # This will likely go to the misfit escrow
         else:
             witness.parser.parseOne(
-                ims=msg, local=False, version=pvrsn
+                ims=msg, local=False, version=kering.Vrsn_2_0
             )  # This will likely go to the misfit escrow
 
         ilk = serder.ked["t"]

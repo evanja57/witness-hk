@@ -303,7 +303,7 @@ def test_aids_accepts_v2_attachments_for_delegated_aids(multipart, version):
 
 
 def test_http_post_uses_inbound_version_across_event_types():
-    """Tests `POST /` should parse real v1 and v2 bodies using each message's v field"""
+    """POST / parses V2 attachments without changing the message body version."""
 
     cases = (
         ("bob-http-v1", b"0123456789fehtv1", kering.Vrsn_1_0),
@@ -346,7 +346,7 @@ def test_http_post_uses_inbound_version_across_event_types():
             witness = witery.wits[bob_wit]
 
             # Submit an inception event
-            icp = bobHab.msgOwnEvent(sn=0)
+            icp = bobHab.msgOwnEvent(sn=0, gvrsn=kering.Vrsn_2_0)
             req = _create_cesr_request(
                 path="/",
                 msg=icp,
@@ -366,12 +366,18 @@ def test_http_post_uses_inbound_version_across_event_types():
             assert stored_version == version
 
             # Submit a ksn query event to Bob's witness
-            qry = bobHab.query(
+            qry = eventing.query(
                 pre=bobHab.pre,
-                src=bob_wit,
                 route="ksn",
+                query={"i": bobHab.pre, "src": bob_wit},
                 version=version,
                 kind=eventing.Kinds.json,
+            )
+            qry = bobHab.endorse(
+                qry,
+                last=True,
+                framed=False,
+                gvrsn=kering.Vrsn_2_0,
             )
             req = _create_cesr_request(
                 path="/",
@@ -389,6 +395,7 @@ def test_http_post_uses_inbound_version_across_event_types():
                 eid=bobHab.pre,
                 role=kering.Roles.controller,
                 version=version,
+                gvrsn=kering.Vrsn_2_0,
                 kind=eventing.Kinds.json,
             )
             req = _create_cesr_request(
