@@ -2,16 +2,192 @@
 """
 tests.witopnet.app.test_indirecting module
 
-Unit tests for KeyStateEnd and KeyLogEnd endpoint classes
+Tests for witness event intake and key-state endpoints.
 """
 
-import falcon
-from falcon import testing
+from datetime import timedelta
 from unittest.mock import MagicMock
-from keri import kering
-from keri.app.httping import CESR_DESTINATION_HEADER
 
-from witopnet.app.indirecting import KeyStateEnd, KeyLogEnd
+import falcon
+import pyotp
+import pytest
+from falcon import testing
+from hio.base import doing
+from keri import core, kering
+from keri.app import forwarding, habbing
+from keri.app.httping import CESR_DESTINATION_HEADER
+from keri.help import helping
+from keri.peer import exchanging
+
+from witopnet.app.indirecting import HttpEnd, KeyLogEnd, KeyStateEnd
+from witopnet.core import basing, witnessing
+
+
+@pytest.fixture
+def http_witery():
+    db = basing.Baser(name="http-put", temp=True)
+    witery = witnessing.Witnessery(db=db, temp=True)
+    doist = doing.Doist(doers=[witery])
+    try:
+        doist.enter()
+        app = falcon.App()
+        app.add_route("/", HttpEnd(witery=witery))
+        yield witery, testing.TestClient(app)
+    finally:
+        doist.exit()
+        db.close(clear=True)
+
+
+@pytest.mark.parametrize(
+    "kind", (kering.Kinds.json, kering.Kinds.cbor, kering.Kinds.mgpk)
+)
+def test_http_put_forwards_stream_to_selected_mailbox(http_witery, monkeypatch, kind):
+    witery, client = http_witery
+    with (
+        habbing.openHab(name="sender", version=kering.Vrsn_2_0) as (hby, sender),
+        habbing.openHab(name="recipient", version=kering.Vrsn_2_0) as (rhby, recipient),
+    ):
+        witness = witery.createWitness(recipient.pre)
+        other = witery.createWitness(sender.pre)
+        monkeypatch.setattr(
+            sender,
+            "endsFor",
+            lambda pre: {kering.Roles.witness: {witness.hab.pre: {"http": witery.url}}},
+        )
+        poster = forwarding.StreamPoster(
+            hby=hby, hab=sender, recp=recipient.pre, topic="echo", kind=kind
+        )
+        messages = []
+        for text in ("first", "second"):
+            exn = core.exchange(
+                sender=sender.pre,
+                route="/echo",
+                attributes={"msg": text},
+                version=kering.Vrsn_2_0,
+                kind=kind,
+            )
+            msg = sender.endorse(exn, last=False, framed=False, gvrsn=kering.Vrsn_2_0)
+            poster.send(serder=exn, attachment=msg[exn.size :])
+            messages.append(exn)
+
+        (messenger,) = poster.deliver()
+        try:
+            (request,) = messenger.client.requests
+            assert request["method"] == "PUT"
+            headers = {key: str(value) for key, value in request["headers"].items()}
+            body = bytes(request["body"])
+            topic = f"{recipient.pre}/echo"
+            response = client.simulate_put("/", body=body)
+            assert response.status_code == 400
+            response = client.simulate_put(
+                "/", body=body, headers={CESR_DESTINATION_HEADER: recipient.pre}
+            )
+            assert response.status_code == 404
+            assert not list(witness.mbx.cloneTopicIter(topic=topic))
+
+            for malformed in (b'{"v":', b"-"):
+                response = client.simulate_put("/", body=malformed, headers=headers)
+                assert response.status_code == 204
+                assert not list(witness.mbx.cloneTopicIter(topic=topic))
+
+            # An unsigned message must not block the complete frames that follow it.
+            invalid = core.exchange(
+                sender=sender.pre,
+                route="/fwd",
+                modifiers={"pre": recipient.pre, "topic": "echo"},
+                attributes={"evt": messages[0].said},
+                version=kering.Vrsn_2_0,
+                kind=kind,
+            )
+            witness.parser.version = kering.Vrsn_1_0
+            headers["Content-Length"] = str(len(invalid.raw) + len(body))
+            response = client.simulate_put(
+                "/", body=invalid.raw + body, headers=headers
+            )
+            assert response.status_code == 204
+            assert witness.parser.version == kering.Vrsn_2_0
+            assert sender.pre in witness.hab.kevers
+            assert witness.hby.db.exns.get((invalid.said,)) is None
+            rows = list(witness.mbx.cloneTopicIter(topic=topic))
+            assert len(rows) == 2
+            assert not list(other.mbx.cloneTopicIter(topic=topic))
+            assert sender.pre not in other.hab.kevers
+
+            exc = exchanging.Exchanger(hby=rhby, handlers=[])
+            parser = core.Parser(kvy=rhby.kvy, exc=exc, version=kering.Vrsn_2_0)
+            parser.parse(ims=sender.replay(gvrsn=kering.Vrsn_2_0), local=False)
+            for exn, (_, _, stored) in zip(messages, rows, strict=True):
+                parser.parse(ims=bytearray(stored), local=False)
+                assert exc.complete(exn.said)
+                assert exchanging.verify(rhby, exn)
+                assert rhby.db.exns.get((exn.said,)).raw == exn.raw
+        finally:
+            messenger.client.close()
+
+
+@pytest.mark.parametrize("version", (kering.Vrsn_1_0, kering.Vrsn_2_0))
+def test_http_put_requires_valid_auth_for_locally_witnessed_events(
+    http_witery, version
+):
+    witery, client = http_witery
+    with habbing.openHab(
+        name="controller", version=version, kind=kering.Kinds.json
+    ) as (_, controller):
+        witness = witery.createWitness(controller.pre)
+        headers = {CESR_DESTINATION_HEADER: witness.hab.pre}
+        response = client.simulate_put(
+            "/", body=controller.msgOwnInception(gvrsn=kering.Vrsn_2_0), headers=headers
+        )
+        assert response.status_code == 204
+        assert witness.hab.kevers[controller.pre].sn == 0
+
+        rotation = controller.rotate(
+            adds=[witness.hab.pre], version=version, gvrsn=kering.Vrsn_2_0
+        )
+        response = client.simulate_put("/", body=rotation, headers=headers)
+        assert response.status_code == 204
+        assert witness.hab.kevers[controller.pre].sn == 0
+
+        secret = b"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+        encrypter = core.Encrypter(verkey=witness.hab.kever.verfers[0].qb64b)
+        seed = core.Matter(raw=secret, code=core.MtrDex.Ed25519_Seed)
+        witness.addCode(encrypter.encrypt(ser=seed.qb64b))
+        now = helping.nowUTC()
+        totp = pyotp.TOTP(secret)
+        valid = totp.at(now)
+        wrong = str((int(valid) + 1) % 1000000).zfill(6)
+        expired = now - timedelta(minutes=11)
+        for auth in (
+            None,
+            f"{wrong}#{now.isoformat()}",
+            "invalid",
+            f"{valid}#invalid",
+            f"{valid}#{now.replace(tzinfo=None).isoformat()}",
+            f"{totp.at(expired)}#{expired.isoformat()}",
+        ):
+            request_headers = dict(headers)
+            if auth is not None:
+                request_headers["Authorization"] = auth
+            response = client.simulate_put("/", body=rotation, headers=request_headers)
+            assert response.status_code == 204
+            assert witness.hab.kevers[controller.pre].sn == 0
+            assert controller.kever.serder.said in witness.hab.db.misfits.get(
+                (controller.pre, controller.kever.serder.snh)
+            )
+
+        response = client.simulate_put(
+            "/",
+            body=rotation,
+            headers={**headers, "Authorization": f"{valid}#{now.isoformat()}"},
+        )
+        assert response.status_code == 204
+        assert witness.hab.kevers[controller.pre].sn == 1
+        assert witness.hab.kevers[controller.pre].serder.pvrsn == version
+
+        interaction = controller.interact(gvrsn=kering.Vrsn_2_0)
+        response = client.simulate_put("/", body=interaction, headers=headers)
+        assert response.status_code == 204
+        assert witness.hab.kevers[controller.pre].sn == 1
 
 
 class TestKeyStateEnd:
