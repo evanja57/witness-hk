@@ -30,9 +30,11 @@ class Multipart:
             buff.write(b"\r\n")
             buff.write(b"\r\n")
             buff.write(data)
-            buff.write(b"\r\n--")
-            buff.write(boundary.encode())
-            buff.write(b"--\r\n")
+            buff.write(b"\r\n")
+
+        buff.write(b"--")
+        buff.write(boundary.encode())
+        buff.write(b"--\r\n")
 
         headers = {
             "Content-Type": f"multipart/form-data; boundary={boundary}",
