@@ -289,40 +289,54 @@ class HttpEnd:
 
     def on_put(self, req, rep):
         """
-        Handles PUT for KERI mbx event messages.
+        Handles PUT for complete CESR message streams.
 
         Parameters:
               req (Request) Falcon HTTP request
               rep (Response) Falcon HTTP response
 
         ---
-        summary:  Accept KERI events with attachment headers and parse
-        description:  Accept KERI events with attachment headers and parse.
+        summary:  Accept and parse a complete CESR stream
+        description:  Route the stream to the destination witness.
         tags:
            - Events
         requestBody:
            required: true
            content:
-             application/json:
+             application/cesr:
                schema:
-                 type: object
-                 description: KERI event message
+                 type: string
+                 format: binary
+                 description: CESR messages and attachments
         responses:
-           200:
-              description: Mailbox query response for server sent events
            204:
-              description: KEL or EXN event accepted.
+              description: Stream submitted for processing.
         """
         if req.method == "OPTIONS":
             rep.status = falcon.HTTP_200
             return
 
+        if CESR_DESTINATION_HEADER not in req.headers:
+            raise falcon.HTTPBadRequest(title="CESR request destination header missing")
+
+        aid = req.headers[CESR_DESTINATION_HEADER]
+        witness = self.witery.lookup(aid)
+        if witness is None:
+            raise falcon.HTTPNotFound(title=f"unknown destination AID {aid}")
+
         rep.set_header("Cache-Control", "no-cache")
         rep.set_header("connection", "close")
 
-        self.rxbs.extend(req.bounded_stream.read())
+        msg = bytearray(req.bounded_stream.read())
+        local = False
+        if (cipher := witness.getCode()) is not None:
+            plain = witness.hab.decrypt(ser=cipher.raw)
+            scode = coring.Matter(qb64b=plain).raw
+            if (auth := req.get_header("Authorization")) is not None:
+                local = validCode(scode, auth)
 
-        rep.set_header("Content-Type", "application/json")
+        witness.parser.parse(ims=msg, local=local, version=kering.Vrsn_2_0)
+
         rep.status = falcon.HTTP_204
 
 
@@ -824,9 +838,12 @@ def validCode(scode, auth):
         bool: True if the OTP is valid for the given time and the timestamp is
             not older than 10 minutes; False otherwise
     """
-    otp, dtstr = auth.split("#")
-    dt = helping.fromIso8601(dtstr)
-    if dt < (helping.nowUTC() - datetime.timedelta(minutes=10)):
-        return False
+    try:
+        otp, dtstr = auth.split("#")
+        dt = helping.fromIso8601(dtstr)
+        if dt < (helping.nowUTC() - datetime.timedelta(minutes=10)):
+            return False
 
-    return pyotp.TOTP(scode).verify(otp, for_time=dt)
+        return pyotp.TOTP(scode).verify(otp, for_time=dt)
+    except ValueError, TypeError:
+        return False
